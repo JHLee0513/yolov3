@@ -35,7 +35,7 @@ def create_modules(module_defs, img_size, arc):
                                                    bias=not bn))
             if bn:
                 modules.add_module('BatchNorm2d', nn.BatchNorm2d(filters, momentum=0.1))
-            if mdef['activation'] == 'leaky':  # TODO: activation study https://github.com/ultralytics/yolov3/issues/441
+            if mdef['activation'] == 'leaky':  # activation study https://github.com/ultralytics/yolov3/issues/441
                 modules.add_module('activation', nn.LeakyReLU(0.1, inplace=True))
                 # modules.add_module('activation', nn.PReLU(num_parameters=1, init=0.10))
             elif mdef['activation'] == 'swish':
@@ -133,19 +133,19 @@ class weightedFeatureFusion(nn.Module):  # weighted sum of 2 or more layers http
             x = x * w[0]
 
         # Fusion
-        nc = x.shape[1]  # number of channels
+        nc = x.shape[1]  # input channels
         for i in range(self.n - 1):
-            a = outputs[self.layers[i]]  # feature to add
-            dc = nc - a.shape[1]  # delta channels
+            a = outputs[self.layers[i]] * w[i + 1] if self.weight else outputs[self.layers[i]]  # feature to add
+            ac = a.shape[1]  # feature channels
+            dc = nc - ac  # delta channels
 
             # Adjust channels
-            if dc > 0:  # pad
-                a = nn.ZeroPad2d((0, 0, 0, 0, 0, dc))(a)
-            elif dc < 0:  # slice
-                a = a[:, :nc]
-
-            # Sum
-            x = x + a * w[i + 1] if self.weight else x + a
+            if dc > 0:  # slice input
+                x[:, :ac] = x[:, :ac] + a  # or a = nn.ZeroPad2d((0, 0, 0, 0, 0, dc))(a); x = x + a
+            elif dc < 0:  # slice feature
+                x = x + a[:, :nc]
+            else:  # same shape
+                x = x + a
         return x
 
 
