@@ -363,7 +363,7 @@ class FocalLoss(nn.Module):
             return loss
 
 
-def compute_loss(p, targets, model, giou_flag=True):  # predictions, targets, model
+def compute_loss(p, targets, model):  # predictions, targets, model
     ft = torch.cuda.FloatTensor if p[0].is_cuda else torch.Tensor
     lcls, lbox, lobj = ft([0]), ft([0]), ft([0])
     tcls, tbox, indices, anchor_vec = build_targets(model, targets)
@@ -401,7 +401,7 @@ def compute_loss(p, targets, model, giou_flag=True):  # predictions, targets, mo
             pbox = torch.cat((pxy, pwh), 1)  # predicted box
             giou = bbox_iou(pbox.t(), tbox[i], x1y1x2y2=False, GIoU=True)  # giou computation
             lbox += (1.0 - giou).sum() if red == 'sum' else (1.0 - giou).mean()  # giou loss
-            tobj[b, a, gj, gi] = giou.detach().clamp(0).type(tobj.dtype) if giou_flag else 1.0
+            tobj[b, a, gj, gi] = (1.0 - model.gr) + model.gr * giou.detach().clamp(0).type(tobj.dtype)  # giou ratio
 
             if 'default' in arc and model.nc > 1:  # cls loss (only if multiple classes)
                 t = torch.zeros_like(ps[:, 5:])  # targets
@@ -501,7 +501,7 @@ def build_targets(model, targets):
     return tcls, tbox, indices, av
 
 
-def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, multi_cls=True, classes=None, agnostic=False):
+def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, multi_label=True, classes=None, agnostic=False):
     """
     Removes detections with lower object confidence score than 'conf_thres'
     Non-Maximum Suppression to further filter detections.
@@ -516,7 +516,7 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, multi_cls=Tru
     method = 'vision_batch'
     batched = 'batch' in method  # run once per image, all classes simultaneously
     nc = prediction[0].shape[1] - 5  # number of classes
-    multi_cls = multi_cls and (nc > 1)  # allow multiple classes per anchor
+    multi_label &= nc > 1  # multiple labels per box
     output = [None] * len(prediction)
     for image_i, pred in enumerate(prediction):
         # Apply conf constraint
@@ -525,6 +525,10 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, multi_cls=Tru
         # Apply width-height constraint
         pred = pred[((pred[:, 2:4] > min_wh) & (pred[:, 2:4] < max_wh)).all(1)]
 
+        # If none remain process next image
+        if not pred.shape[0]:
+            continue
+
         # Compute conf
         pred[..., 5:] *= pred[..., 4:5]  # conf = obj_conf * cls_conf
 
@@ -532,7 +536,7 @@ def non_max_suppression(prediction, conf_thres=0.1, iou_thres=0.6, multi_cls=Tru
         box = xywh2xyxy(pred[:, :4])
 
         # Detections matrix nx6 (xyxy, conf, cls)
-        if multi_cls:
+        if multi_label:
             i, j = (pred[:, 5:] > conf_thres).nonzero().t()
             pred = torch.cat((box[i], pred[i, j + 5].unsqueeze(1), j.float().unsqueeze(1)), 1)
         else:  # best class only
