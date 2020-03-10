@@ -7,6 +7,7 @@ from utils.utils import *
 import cv2
 import pyrealsense2 as rs
 import torchvision.transforms as transforms
+import matplotlib.pyplot as plt
 
 def detect(pipe = None, save_img=False):
     img_size = (320, 192) if ONNX_EXPORT else opt.img_size  # (320, 192) or (416, 256) or (608, 352) for (height, width)
@@ -73,27 +74,25 @@ def detect(pipe = None, save_img=False):
     # for path, img, im0s, vid_cap in dataset:
     while True:
         t = time.time()
-
         # Get detections
-        img = pipe.wait_for_frames()
-        
-        # Align the depth frame to color frame
-        aligned_frames = align.process(img)
+        frames = pipe.wait_for_frames()
+        depth_frame = frames.get_depth_frame()
+        color_frame = frames.get_color_frame()
 
-        # Get aligned frames
-        aligned_depth_frame = aligned_frames.get_depth_frame() # aligned_depth_frame is a 640x480 depth image
-        aligned_color_frame = aligned_frames.get_color_frame()
+        # Get Intrinsics
+        depth_intrinsic = depth_frame.profile.as_video_stream_profile().intrinsics
+        color_intrinsic = color_frame.profile.as_video_stream_profile().intrinsics
+        depth_to_color_extrin = depth_frame.profile.get_extrinsics_to(color_frame.profile)
 
-        aligned_color_frame = np.asanyarray(img.get_data())
-        #im0 = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
-        #im0 = cv2.resize(im0, (640,480))
-        aligned_color_frame = cv2.resize(img, (320, 320))
-        im0 = cv2.cvtColor(aligned_color_frame, cv2.COLOR_RGB2BGR)       # im0 is original image
+        depth_sensor = pipe_profile.get_device().first_depth_sensor()
+        depth_scale = depth_sensor.get_depth_scale()
+
+        # get color frame for original plotting and model pred
+        color_frame_ = np.asanyarray(color_frame.get_data())
+        # im0: original image (resize 320x320)
+        im0 = cv2.resize(color_frame_, (320,320))
         img = transforms.ToTensor()(im0).to(device)
         
-        aligned_depth_frame = cv2.resize(aligned_depth_frame, (320, 320))
-
-        #img = torch.from_numpy(img).to(device)
         if img.ndimension() == 3:
             img = img.unsqueeze(0)
         pred = model(img)[0]
@@ -104,14 +103,10 @@ def detect(pipe = None, save_img=False):
         # Apply NMS
         pred = non_max_suppression(pred, opt.conf_thres, opt.iou_thres, classes=opt.classes, agnostic=opt.agnostic_nms)
 
-        # Apply Classifier
-        #if classify:
-        #    pred = apply_classifier(pred, modelc, img, im0s)
-
         # Process detections
         for i, det in enumerate(pred):  # detections per image
             # depth mask for each of the objects
-            class_mask = np.zeros((320, 320, 21))
+            #class_mask = np.zeros((320, 320, 21))
 
             s = ""
             #if webcam:  # batch_size >= 1
@@ -135,21 +130,17 @@ def detect(pipe = None, save_img=False):
                     if save_img or view_img:  # Add bbox to image
                         label = '%s %.2f' % (names[int(cls)], conf)
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)])
-            #print(det)
-            
-            # fill in bounding box area for mask
-            # cv2.contour for each channel
-            # for each contour -> find the centroid
-
-            # depth + color image combine to overlay 
-
+                detected_centroids = find_object_location(det, depth_intrinsic, depth_scale)
+                print(detected_centroids)
 
             # Stream results
             if True:
                 print(1 / (time.time() - t))
+                #plt.figure(1)
+                #plt.imshow(im0)
+                #plt.show()
                 #cv2.imshow("output", im0)
                 #cv2.imshow("resized", cv2.resize(im0, (1080,720)))
-                
                 if cv2.waitKey(1) == ord('q'):  # q to quit
                     raise StopIteration
 
@@ -177,6 +168,73 @@ def detect(pipe = None, save_img=False):
     #print('Done. (%.3fs)' % (time.time() - t0))
 
 
+"""
+suppose given wanted_class = i
+for pred in det:
+    # check last dim of pred for class i
+    # save tensor in some list 
+from list get highest tensor as final ROI (region of interest)
+
+depth_aligned_image (320,320)
+from tensor get xmin, xmax, ymin, ymax
+
+average_depth = depth_alinged_image[xmin:xmax, ymin:ymax].mean()
+
+x,y, depth in "camera frame"
+
+done up until here 3/2/20, 19:56
+
+TODO: get collection of all detected objects to get centroid of
+TODO: get parameter from edan or someone who knows about camera-->base link
+TODO: matrix tranformation to get final centroid
+TODO: publish centroid thru ros
+TODO: Transform depth from pixel to world frame 
+    
+
+Given a detection, depth data, and type of object we're looking for:
+    calculate: x, y, avg_depth for the object detected
+"""
+def find_object_location(det, depth_intrinsic, depth_scale, wanted_class=1):
+    roi = []
+    if det is None:
+        return
+    #for pred in det:
+    #    if int(pred[-1]) == wanted_class:
+    #        roi.append(pred)
+    #highest_detected = None
+    detected_centroids = []
+    for highest_detected in det:
+        #highest_detected = pred if highest_detected is None or pred[-2] > highest_detected[-2] else highest_detected
+    
+        x_min, x_max, y_min, y_max = highest_detected[0], \
+                                     highest_detected[2], \
+                                     highest_detected[1], \
+                                     highest_detected[3] 
+        x_min, x_max, y_min, y_max = int(x_min.item() / 320. * 1280), int(x_max.item() / 320. * 1280), int(y_min.item() / 320. * 720), int(y_max.item() / 320. * 720)
+
+    #print("ORIGINAL PCL SHAPE: ", aligned_depth_frame.shape)
+    #ROI = np.zeros((x_max-x_min,y_max-y_min,3))
+    #print("predicted box: %f %f %f %f" % (x_min, x_max, y_min, y_max))
+    #centroid = np.zeros(3)
+    #for i in range(x_min,x_max+1):
+    #    for j in range(y_min,y_max+1):
+        centroid = rs.rs2_deproject_pixel_to_point(depth_intrinsic,[(x_max - x_min) // 2,(y_max-y_min)//2], depth_scale)
+        # centroid /= ((x_max - x_min) * (y_max - y_min))
+        detected_centroids += [[centroid,classes_list[int(highest_detected[-1].cpu().data)]]]
+    
+#return [centroid, wanted_class]
+    return detected_centroids
+    #plt.imshow(ROI)
+    #plt.show()
+    #print("ROI SHAPE: ", ROI.shape)
+    #x, y = x_max - x_min, y_max - y_min
+    #print(ROI[:,:,0].mean(), ROI[:,:,1].mean(), ROI[:,:,2].mean())
+    #print("location: %3f, %3f, %3f" % (avg_depth))
+    #return x, y, avg_depth
+    # Get x,y,z coordinate in robot frame
+    # publish via rospy publisher
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('--cfg', type=str, default='cfg/yolov3-spp.cfg', help='*.cfg path')
@@ -197,11 +255,12 @@ if __name__ == '__main__':
     opt = parser.parse_args()
     print(opt)
 
+    classes_list = open("./data/classes.names", "r").readlines()
     align_to = rs.stream.color
     align = rs.align(align_to)
 
     pipeline = rs.pipeline()
-    pipeline.start()
+    pipe_profile = pipeline.start()
 
     with torch.no_grad():
         detect(pipe = pipeline)
