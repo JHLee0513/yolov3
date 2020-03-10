@@ -220,7 +220,7 @@ def find_object_location(det, depth_intrinsic, depth_scale, wanted_class=1):
     #    for j in range(y_min,y_max+1):
         centroid = rs.rs2_deproject_pixel_to_point(depth_intrinsic,[(x_max - x_min) // 2,(y_max-y_min)//2], depth_scale)
         # centroid /= ((x_max - x_min) * (y_max - y_min))
-        detected_centroids += [[centroid,classes_list[int(highest_detected[-1].cpu().data)]]]
+        detected_centroids += [[centroid,classes_list[int(highest_detected[-1].cpu().data)].rstrip("\n")]]
     
 #return [centroid, wanted_class]
     return detected_centroids
