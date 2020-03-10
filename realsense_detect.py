@@ -130,11 +130,8 @@ def detect(pipe = None, save_img=False):
                     if save_img or view_img:  # Add bbox to image
                         label = '%s %.2f' % (names[int(cls)], conf)
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)])
-            
-            detected_centroids = \
-                        find_object_location(det, depth_intrinsic, depth_scale, wanted_class = cls)
-
-            print(detected_centroids)
+                detected_centroids = find_object_location(det, depth_intrinsic, depth_scale)
+                print(detected_centroids)
 
             # Stream results
             if True:
@@ -201,31 +198,32 @@ def find_object_location(det, depth_intrinsic, depth_scale, wanted_class=1):
     roi = []
     if det is None:
         return
-    for pred in det:
-        if pred[-1] == wanted_class:
-            roi.append(pred)
-
-    highest_detected = None
-    for pred in roi:
-        highest_detected = pred if highest_detected is None or pred[-2] > highest_detected[-2] else highest_detected
-    if highest_detected is None:
-        return
-    x_min, x_max, y_min, y_max = highest_detected[0], \
-                                 highest_detected[2], \
-                                 highest_detected[1], \
-                                 highest_detected[3] 
-    x_min, x_max, y_min, y_max = int(x_min.item() / 320. * 1280), int(x_max.item() / 320. * 1280), int(y_min.item() / 320. * 720), int(y_max.item() / 320. * 720)
+    #for pred in det:
+    #    if int(pred[-1]) == wanted_class:
+    #        roi.append(pred)
+    #highest_detected = None
+    detected_centroids = []
+    for highest_detected in det:
+        #highest_detected = pred if highest_detected is None or pred[-2] > highest_detected[-2] else highest_detected
+    
+        x_min, x_max, y_min, y_max = highest_detected[0], \
+                                     highest_detected[2], \
+                                     highest_detected[1], \
+                                     highest_detected[3] 
+        x_min, x_max, y_min, y_max = int(x_min.item() / 320. * 1280), int(x_max.item() / 320. * 1280), int(y_min.item() / 320. * 720), int(y_max.item() / 320. * 720)
 
     #print("ORIGINAL PCL SHAPE: ", aligned_depth_frame.shape)
-    ROI = np.zeros((x_max-x_min,y_max-y_min,3))
-    print("predicted box: %f %f %f %f" % (x_min, x_max, y_min, y_max))
+    #ROI = np.zeros((x_max-x_min,y_max-y_min,3))
+    #print("predicted box: %f %f %f %f" % (x_min, x_max, y_min, y_max))
     #centroid = np.zeros(3)
     #for i in range(x_min,x_max+1):
     #    for j in range(y_min,y_max+1):
-    centroid = rs.rs2_deproject_pixel_to_point(depth_intrinsic,[(x_max - x_min) // 2,(y_max-y_min)//2], depth_scale)
-    # centroid /= ((x_max - x_min) * (y_max - y_min))
-
-    return (centroid, wanted_class)
+        centroid = rs.rs2_deproject_pixel_to_point(depth_intrinsic,[(x_max - x_min) // 2,(y_max-y_min)//2], depth_scale)
+        # centroid /= ((x_max - x_min) * (y_max - y_min))
+        detected_centroids += [[centroid,classes_list[int(highest_detected[-1].cpu().data)]]]
+    
+#return [centroid, wanted_class]
+    return detected_centroids
     #plt.imshow(ROI)
     #plt.show()
     #print("ROI SHAPE: ", ROI.shape)
@@ -257,6 +255,7 @@ if __name__ == '__main__':
     opt = parser.parse_args()
     print(opt)
 
+    classes_list = open("./data/classes.names", "r").readlines()
     align_to = rs.stream.color
     align = rs.align(align_to)
 
