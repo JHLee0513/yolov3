@@ -141,9 +141,11 @@ def train():
     # lf = lambda x: 1 - x / epochs  # linear ramp to zero
     # lf = lambda x: 10 ** (hyp['lrf'] * x / epochs)  # exp ramp
     # lf = lambda x: 1 - 10 ** (hyp['lrf'] * (1 - x / epochs))  # inverse exp ramp
-    lf = lambda x: (1 + math.cos(x * math.pi / epochs)) / 2 * 0.99 + 0.01  # cosine https://arxiv.org/pdf/1812.01187.pdf
-    scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
-    # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[round(epochs * x) for x in [0.8, 0.9]], gamma=0.1)
+    # lf = lambda x: 0.5 * (1 + math.cos(x * math.pi / epochs))  # cosine https://arxiv.org/pdf/1812.01187.pdf
+    # scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf)
+    # scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=range(59, 70, 1), gamma=0.8)  # gradual fall to 0.1*lr0
+    scheduler = lr_scheduler.MultiStepLR(optimizer, milestones=[round(epochs * x) for x in [0.8, 0.9]], gamma=0.1)
+
     scheduler.last_epoch = start_epoch
 
     # # Plot lr schedule
@@ -215,10 +217,10 @@ def train():
 
         # Prebias
         if prebias:
-            ne = max(round(30 / nb), 3)  # number of prebias epochs
-            ps = np.interp(epoch, [0, ne], [0.1, hyp['lr0'] * 2]), \
-                 np.interp(epoch, [0, ne], [0.9, hyp['momentum']])  # prebias settings (lr=0.1, momentum=0.9)
-            if epoch == ne:
+            if epoch < 3:  # prebias
+                ps = np.interp(epoch, [0, 3], [0.1, hyp['lr0']]), 0.0  # prebias settings (lr=0.1, momentum=0.0)
+            else:  # normal training
+                ps = hyp['lr0'], hyp['momentum']  # normal training settings
                 print_model_biases(model)
                 prebias = False
 
