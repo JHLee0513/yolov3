@@ -1,8 +1,8 @@
 import torch.nn.functional as F
 
-from utils.google_utils import *
-from utils.parse_config import *
-from utils.utils import *
+from .utils.google_utils import *
+from .utils.parse_config import *
+from .utils.utils import *
 
 ONNX_EXPORT = False
 
