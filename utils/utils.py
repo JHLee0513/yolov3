@@ -188,6 +188,7 @@ def ap_per_class(tp, conf, pred_cls, target_cls):
     unique_classes = np.unique(target_cls)
 
     # Create Precision-Recall curve and compute AP for each class
+    pr_score = 0.5  # score to evaluate P and R https://github.com/ultralytics/yolov3/issues/898
     s = [len(unique_classes), tp.shape[1]]  # number class, number iou thresholds (i.e. 10 for mAP0.5...0.95)
     ap, p, r = np.zeros(s), np.zeros(s), np.zeros(s)
     for ci, c in enumerate(unique_classes):
@@ -204,18 +205,18 @@ def ap_per_class(tp, conf, pred_cls, target_cls):
 
             # Recall
             recall = tpc / (n_gt + 1e-16)  # recall curve
-            r[ci] = recall[-1]
+            r[ci] = np.interp(-pr_score, -conf[i], recall[:, 0])  # r at pr_score, negative x, xp because xp decreases
 
             # Precision
             precision = tpc / (tpc + fpc)  # precision curve
-            p[ci] = precision[-1]
+            p[ci] = np.interp(-pr_score, -conf[i], precision[:, 0])  # p at pr_score
 
             # AP from recall-precision curve
             for j in range(tp.shape[1]):
                 ap[ci, j] = compute_ap(recall[:, j], precision[:, j])
 
             # Plot
-            # fig, ax = plt.subplots(1, 1, figsize=(4, 4))
+            # fig, ax = plt.subplots(1, 1, figsize=(5, 5))
             # ax.plot(recall, precision)
             # ax.set_xlabel('Recall')
             # ax.set_ylabel('Precision')
@@ -377,6 +378,14 @@ def compute_loss(p, targets, model):  # predictions, targets, model
     BCE = nn.BCEWithLogitsLoss(reduction=red)
     CE = nn.CrossEntropyLoss(reduction=red)  # weight=model.class_weights
 
+    # class label smoothing https://arxiv.org/pdf/1902.04103.pdf eqn 3
+    smooth = False
+    if smooth:
+        e = 0.1  #  class label smoothing epsilon
+        cp, cn = 1.0 - e, e / (model.nc - 0.99)  # class positive and negative labels
+    else:
+        cp, cn = 1.0, 0.0
+
     if 'F' in arc:  # add focal loss
         g = h['fl_gamma']
         BCEcls, BCEobj, BCE, CE = FocalLoss(BCEcls, g), FocalLoss(BCEobj, g), FocalLoss(BCE, g), FocalLoss(CE, g)
@@ -404,15 +413,10 @@ def compute_loss(p, targets, model):  # predictions, targets, model
             tobj[b, a, gj, gi] = giou.detach().clamp(0).type(tobj.dtype) if giou_flag else 1.0
 
             if 'default' in arc and model.nc > 1:  # cls loss (only if multiple classes)
-                t = torch.zeros_like(ps[:, 5:])  # targets
-                t[range(nb), tcls[i]] = 1.0
+                t = torch.zeros_like(ps[:, 5:]) + cn  # targets
+                t[range(nb), tcls[i]] = cp
                 lcls += BCEcls(ps[:, 5:], t)  # BCE
                 # lcls += CE(ps[:, 5:], tcls[i])  # CE
-
-                # Instance-class weighting (use with reduction='none')
-                # nt = t.sum(0) + 1  # number of targets per class
-                # lcls += (BCEcls(ps[:, 5:], t) / nt).mean() * nt.mean()  # v1
-                # lcls += (BCEcls(ps[:, 5:], t) / nt[tcls[i]].view(-1,1)).mean() * nt.mean()  # v2
 
             # Append targets to text file
             # with open('targets.txt', 'a') as file:

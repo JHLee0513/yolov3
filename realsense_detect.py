@@ -8,6 +8,8 @@ import cv2
 import pyrealsense2 as rs
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
+import rospy
+from std_msgs.msg import Float32MultiArray, MultiArrayDimension
 
 def detect(pipe = None, save_img=False):
     img_size = (320, 192) if ONNX_EXPORT else opt.img_size  # (320, 192) or (416, 256) or (608, 352) for (height, width)
@@ -70,10 +72,10 @@ def detect(pipe = None, save_img=False):
     colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(len(names))]
 
     # Run inference
-    t0 = time.time()
+    #t0 = time.time()
     # for path, img, im0s, vid_cap in dataset:
-    while True:
-        t = time.time()
+    while not rospy.is_shutdown():
+        #t = time.time()
         # Get detections
         frames = pipe.wait_for_frames()
         depth_frame = frames.get_depth_frame()
@@ -115,7 +117,8 @@ def detect(pipe = None, save_img=False):
             #    p, s, im0 = path, '', im0s
 
             # save_path = str(Path(out) / Path(p).name)
-            s += '%gx%g ' % img.shape[2:]  # print string
+            #s += '%gx%g ' % img.shape[2:]  # print string
+            detected_centroids = None
             if det is not None and len(det):
                 # Rescale boxes from img_size to im0 size
                 det[:, :4] = scale_coords(img.shape[2:], det[:, :4], im0.shape).round()
@@ -131,42 +134,25 @@ def detect(pipe = None, save_img=False):
                         label = '%s %.2f' % (names[int(cls)], conf)
                         plot_one_box(xyxy, im0, label=label, color=colors[int(cls)])
                 detected_centroids = find_object_location(det, depth_intrinsic, depth_scale)
-                print(detected_centroids)
-
-            # Stream results
+                #print(detected_centroids)
             if True:
-                print(1 / (time.time() - t))
-                #plt.figure(1)
-                #plt.imshow(im0)
-                #plt.show()
+                #print(1 / (time.time() - t))
+                if detected_centroids is not None:
+                    centroid_msg = Float32MultiArray()
+                    centroid_msg.layout.data_offset = 0
+                    centroid_msg.layout.dim = [MultiArrayDimension(), MultiArrayDimension()]
+                    centroid_msg.layout.dim[0].label = "channels"
+                    centroid_msg.layout.dim[0].size = 4
+                    centroid_msg.layout.dim[0].stride = 200
+                    centroid_msg.layout.dim[1].label = "samples"
+                    centroid_msg.layout.dim[1].size = 50
+                    centroid_msg.layout.dim[1].stride = 50
+                    centroid_msg.data = np.array(detected_centroids).flatten()
+                    pub.publish(centroid_msg)
+                    r.sleep()
                 #cv2.imshow("output", im0)
-                #cv2.imshow("resized", cv2.resize(im0, (1080,720)))
-                if cv2.waitKey(1) == ord('q'):  # q to quit
-                    raise StopIteration
-
-            # Save results (image with detections)
-            #if save_img:
-                #if dataset.mode == 'images':
-                #    cv2.imwrite(save_path, im0)
-                #else:
-                #    if vid_path != save_path:  # new video
-                #        vid_path = save_path
-                #        if isinstance(vid_writer, cv2.VideoWriter):
-                #            vid_writer.release()  # release previous video writer
-
-                 #       fps = vid_cap.get(cv2.CAP_PROP_FPS)
-                 #       w = int(vid_cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                 #       h = int(vid_cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                 #       vid_writer = cv2.VideoWriter(save_path, cv2.VideoWriter_fourcc(*opt.fourcc), fps, (w, h))
-                  #  vid_writer.write(im0)
-
-    #if save_txt or save_img:
-    #    print('Results saved to %s' % os.getcwd() + os.sep + out)
-    #    if platform == 'darwin':  # MacOS
-    #        os.system('open ' + out + ' ' + save_path)
-
-    #print('Done. (%.3fs)' % (time.time() - t0))
-
+                #if cv2.waitKey(1) == ord('q'):  # q to quit
+                #    raise StopIteration
 
 """
 suppose given wanted_class = i
@@ -184,26 +170,28 @@ x,y, depth in "camera frame"
 
 done up until here 3/2/20, 19:56
 
-TODO: get collection of all detected objects to get centroid of
-TODO: get parameter from edan or someone who knows about camera-->base link
-TODO: matrix tranformation to get final centroid
-TODO: publish centroid thru ros
-TODO: Transform depth from pixel to world frame 
-    
+TODO: publish centroids in camera_coordinates
+TODO: py2 script that subscribes to centroids, with tf convert to /base_link
+TODO: py2 script publishes centroids in base_link frame
 
 Given a detection, depth data, and type of object we're looking for:
     calculate: x, y, avg_depth for the object detected
 """
 def find_object_location(det, depth_intrinsic, depth_scale, wanted_class=1):
     roi = []
+
     if det is None:
         return
     #for pred in det:
     #    if int(pred[-1]) == wanted_class:
     #        roi.append(pred)
     #highest_detected = None
-    detected_centroids = []
-    for highest_detected in det:
+    detected_centroids = np.zeros((50,4))
+    #print("RAW DET", det.shape)
+    det = det[det[:,4].argsort()]
+    det = det[:50,:]
+    #print("modified", det.shape)
+    for idx, highest_detected in enumerate(det):
         #highest_detected = pred if highest_detected is None or pred[-2] > highest_detected[-2] else highest_detected
     
         x_min, x_max, y_min, y_max = highest_detected[0], \
@@ -220,9 +208,12 @@ def find_object_location(det, depth_intrinsic, depth_scale, wanted_class=1):
     #    for j in range(y_min,y_max+1):
         centroid = rs.rs2_deproject_pixel_to_point(depth_intrinsic,[(x_max - x_min) // 2,(y_max-y_min)//2], depth_scale)
         # centroid /= ((x_max - x_min) * (y_max - y_min))
-        detected_centroids += [[centroid,classes_list[int(highest_detected[-1].cpu().data)]]]
+        #detected_centroids += [[centroid,classes_list[int(highest_detected[-1].cpu().data)].rstrip("\n")]]
+        detected_centroids[idx,:] = np.array([centroid[0], centroid[1], centroid[2], highest_detected[-1].cpu().data.item()])
     
 #return [centroid, wanted_class]
+    #detected_centroids = np.array(detected_centroids)
+    #print(detected_centroids.shape)
     return detected_centroids
     #plt.imshow(ROI)
     #plt.show()
@@ -233,6 +224,9 @@ def find_object_location(det, depth_intrinsic, depth_scale, wanted_class=1):
     #return x, y, avg_depth
     # Get x,y,z coordinate in robot frame
     # publish via rospy publisher
+
+
+
 
 
 if __name__ == '__main__':
@@ -261,6 +255,10 @@ if __name__ == '__main__':
 
     pipeline = rs.pipeline()
     pipe_profile = pipeline.start()
-
+    pub = rospy.Publisher('object_centroids', Float32MultiArray, queue_size=10)
+    rospy.init_node("detected_objects_node")
+    r = rospy.Rate(100)
     with torch.no_grad():
         detect(pipe = pipeline)
+
+
