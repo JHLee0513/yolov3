@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 """
 Wrapper class of YOLOv3 for external usage
 """
@@ -61,12 +62,13 @@ class YOLOv3Detector(Detector):
         names = load_classes("/home/joonho1804/catkin_ws/src/uw_common/uw_detection/src/yolov3/data/coco.names")
         colors = [[random.randint(0, 255) for _ in range(3)] for _ in range(len(names))]
 
-    def predict_(data):
+    def predict_(self, data):
         """
             Callback method for object prediction from image feed
             publishes to topic object_detection
         """
         try:
+            # rospy.logfatal("predicting..")
             frame = self.bridge.imgmsg_to_cv2(data, desired_encoding='passthrough')
             resized_frame = cv2.resize(frame, (320, 320))
             img = transforms.ToTensor()(resized_frame).to(device)
@@ -108,7 +110,7 @@ class YOLOv3Detector(Detector):
             rospy.logfatal(e)
     def predict_from_node(self, topic):
         
-        rospy.Subscriber(topic, Image, self.predict_)
+        self.sub = rospy.Subscriber(topic, Image, self.predict_)
         rospy.spin()
 
 if __name__== "__main__":
